@@ -34,7 +34,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::mem::{self, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::ptr;
 
 struct LruCacheKey<K> {
@@ -157,7 +157,7 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
 
         while current_weight + value.weight() > self.max_total_weight {
             let v = unsafe {
-                self.remove(&(*(*self.tail).prev).key.assume_init_ref())
+                self.remove((*(*self.tail).prev).key.assume_init_ref())
                     .unwrap()
             };
             current_weight -= v.weight();
@@ -209,10 +209,9 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
 
     pub fn get(&mut self, key: &K) -> Option<&V> {
         let lkey = LruCacheKey { key };
-        match self.cache.get(&lkey) {
-            Some(v) => Some(unsafe { v.value.assume_init_ref() }),
-            None => None,
-        }
+        self.cache
+            .get(&lkey)
+            .map(|v| unsafe { v.value.assume_init_ref() })
     }
 
     pub fn remove(&mut self, key: &K) -> Option<V> {
@@ -294,10 +293,10 @@ impl<K, V> Drop for LruWeightedCache<K, V> {
                 ..
             } = tail;
 
-            mem::forget(head_key);
-            mem::forget(head_val);
-            mem::forget(tail_key);
-            mem::forget(tail_val);
+            _ = head_key.assume_init();
+            _ = head_val.assume_init();
+            _ = tail_key.assume_init();
+            _ = tail_val.assume_init();
         }
     }
 }
@@ -375,8 +374,8 @@ mod tests {
     #[test]
     fn eject_by_weight() {
         let mut cache: LruWeightedCache<&str, &str> = LruWeightedCache::new(3, 4).unwrap();
-        for i in vec!["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"] {
-            let _ = cache.insert(i.clone(), i.clone());
+        for i in &["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"] {
+            let _ = cache.insert(i, i);
         }
         let _ = cache.insert("z", "zzz");
         assert_eq!(cache.weight(), 12); // 3 * 4
@@ -386,14 +385,14 @@ mod tests {
     #[test]
     fn replace_by_weight() {
         let mut cache: LruWeightedCache<&str, &str> = LruWeightedCache::new(3, 4).unwrap();
-        for i in vec!["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"] {
-            let _ = cache.insert(i.clone(), i.clone());
+        for i in &["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"] {
+            let _ = cache.insert(i, i);
         }
         let _ = cache.insert("l", "zzz");
         assert_eq!(cache.weight(), 12); // 3 * 4
         assert_eq!(cache.len(), 10); // three items should have been removed, then one added.
     }
-    
+
     #[test]
     fn delete_in_the_cache() {
         let mut cache: LruWeightedCache<&str, &str> = LruWeightedCache::new(5, 2).unwrap();
@@ -405,14 +404,14 @@ mod tests {
         assert!(cache.contains_key(&"foo"));
         assert!(!cache.contains_key(&"bar"));
         assert!(cache.get(&"foo") == Some(&"aa"));
-        assert!(cache.get(&"bar") == None);
+        assert!(cache.get(&"bar").is_none());
     }
 
     #[test]
     fn catch_errant_nonsense() {
         let cache = LruWeightedCache::<&str, &str>::new(0, 0);
         match cache {
-            Ok(_) => assert!(false),
+            Ok(_) => unreachable!(),
             Err(err) => assert_eq!(err, LruError::NonsenseParameters),
         }
     }
