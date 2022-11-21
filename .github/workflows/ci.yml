@@ -38,3 +38,8 @@ jobs:
           toolchain: stable
       - run: |
           make format clip test
+      - name: memory leak test
+        run: |
+          cargo install cargo-valgrind
+          sudo apt update -y && sudo apt install -y valgrind
+          cargo valgrind test
