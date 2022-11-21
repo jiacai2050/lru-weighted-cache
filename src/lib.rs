@@ -32,12 +32,12 @@
 //! so on.  It could not, however, hold 4 strings of length 25: the
 //! `insert()` method will *reject* an object above the `max_weight`.
 
-use std::mem; use std::collections::HashMap;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::mem::{self, MaybeUninit};
 use std::ptr;
-use std::hash::{Hasher, Hash};
 
-struct LruCacheKey<K>
-{
+struct LruCacheKey<K> {
     key: *const K,
 }
 
@@ -60,8 +60,8 @@ pub trait Weighted {
 }
 
 struct LruCacheItem<K, V> {
-    key: K,
-    value: V,
+    key: MaybeUninit<K>,
+    value: MaybeUninit<V>,
     prev: *mut LruCacheItem<K, V>,
     next: *mut LruCacheItem<K, V>,
 }
@@ -69,8 +69,17 @@ struct LruCacheItem<K, V> {
 impl<K, V> LruCacheItem<K, V> {
     fn new(key: K, value: V) -> Self {
         LruCacheItem {
-            key,
-            value,
+            key: MaybeUninit::new(key),
+            value: MaybeUninit::new(value),
+            prev: ptr::null_mut(),
+            next: ptr::null_mut(),
+        }
+    }
+
+    fn new_sigil() -> Self {
+        Self {
+            key: MaybeUninit::uninit(),
+            value: MaybeUninit::uninit(),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
         }
@@ -101,21 +110,22 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
     /// weight of the cache will be `max_count * max_weight`, but it's
     /// important to understand that `max_count` is the number of
     /// *maximal-weight* objects the cache can contain.
-    pub fn new(max_count: usize, max_item_weight: usize) -> Result<LruWeightedCache<K, V>, LruError> {
+    pub fn new(
+        max_count: usize,
+        max_item_weight: usize,
+    ) -> Result<LruWeightedCache<K, V>, LruError> {
         if max_count == 0 || max_item_weight == 0 {
-            return Err(LruError::NonsenseParameters)
+            return Err(LruError::NonsenseParameters);
         }
-        
+
         let max_total_weight = max_item_weight * max_count;
         let lrucache = LruWeightedCache {
             cache: HashMap::new(),
             max_item_weight,
             max_total_weight,
             current_weight: 0,
-            // The documentation says "Really, reconsider before you do
-            // something like this."
-            head: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruCacheItem<K, V>>())) },
-            tail: unsafe { Box::into_raw(Box::new(mem::uninitialized::<LruCacheItem<K, V>>())) },
+            head: Box::into_raw(Box::new(LruCacheItem::new_sigil())),
+            tail: Box::into_raw(Box::new(LruCacheItem::new_sigil())),
         };
 
         // The Oroborous Condition!
@@ -142,11 +152,14 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
         let mut current_weight = self.current_weight;
         if let Some(node_ptr) = *node_ptr {
             // Remove the size of the value for an existing candidate node.
-            unsafe { current_weight -= (*node_ptr).value.weight() };
+            unsafe { current_weight -= (*node_ptr).value.assume_init_ref().weight() };
         }
 
         while current_weight + value.weight() > self.max_total_weight {
-            let v = unsafe{ self.remove(&(*(*self.tail).prev).key).unwrap() };
+            let v = unsafe {
+                self.remove(&(*(*self.tail).prev).key.assume_init_ref())
+                    .unwrap()
+            };
             current_weight -= v.weight();
         }
     }
@@ -174,9 +187,11 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
         match node_ptr {
             Some(node_ptr) => {
                 unsafe {
-                    self.current_weight = (self.current_weight - (*node_ptr).value.weight()) + value.weight();
+                    self.current_weight = (self.current_weight
+                        - (*node_ptr).value.assume_init_ref().weight())
+                        + value.weight();
                     // This is still a move.
-                    (*node_ptr).value = value;
+                    (*node_ptr).value = MaybeUninit::new(value);
                 }
                 self.promote(node_ptr);
             }
@@ -185,7 +200,7 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
                 let mut node = Box::new(LruCacheItem::new(key, value));
                 let node_ptr: *mut LruCacheItem<K, V> = &mut *node;
                 self.attach(node_ptr);
-                let keyref = unsafe { &(*node_ptr).key };
+                let keyref = unsafe { (*node_ptr).key.assume_init_ref() };
                 self.cache.insert(LruCacheKey { key: keyref }, node);
             }
         }
@@ -195,7 +210,7 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
     pub fn get(&mut self, key: &K) -> Option<&V> {
         let lkey = LruCacheKey { key };
         match self.cache.get(&lkey) {
-            Some(v) => Some(&v.value),
+            Some(v) => Some(unsafe { v.value.assume_init_ref() }),
             None => None,
         }
     }
@@ -205,9 +220,10 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
         match self.cache.remove(&key) {
             None => None,
             Some(lru_entry) => {
-                self.current_weight -= (*lru_entry).value.weight();
                 self.detach(&(*lru_entry));
-                Some(lru_entry.value)
+                let value = unsafe { lru_entry.value.assume_init() };
+                self.current_weight -= value.weight();
+                Some(value)
             }
         }
     }
@@ -267,8 +283,16 @@ impl<K, V> Drop for LruWeightedCache<K, V> {
             // compiler we're forgetting about them without "dropping"
             // them.
 
-            let LruCacheItem { key: head_key, value: head_val, .. } = head;
-            let LruCacheItem { key: tail_key, value: tail_val, .. } = tail;
+            let LruCacheItem {
+                key: head_key,
+                value: head_val,
+                ..
+            } = head;
+            let LruCacheItem {
+                key: tail_key,
+                value: tail_val,
+                ..
+            } = tail;
 
             mem::forget(head_key);
             mem::forget(head_val);
@@ -277,7 +301,6 @@ impl<K, V> Drop for LruWeightedCache<K, V> {
         }
     }
 }
-
 
 impl Weighted for String {
     fn weight(&self) -> usize {
@@ -311,16 +334,16 @@ impl<'a> Weighted for &'a Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::{assert_eq};
-    use super::LruWeightedCache;
     use super::LruCacheItem;
     use super::LruError;
+    use super::LruWeightedCache;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn build_an_entry() {
         let entry = LruCacheItem::new("test", "value");
-        assert_eq!(entry.key, "test");
-        assert_eq!(entry.value, "value");
+        assert_eq!(unsafe { entry.key.assume_init() }, "test");
+        assert_eq!(unsafe { entry.value.assume_init() }, "value");
     }
 
     #[test]
@@ -390,8 +413,7 @@ mod tests {
         let cache = LruWeightedCache::<&str, &str>::new(0, 0);
         match cache {
             Ok(_) => assert!(false),
-            Err(err) => assert_eq!(err, LruError::NonsenseParameters)
+            Err(err) => assert_eq!(err, LruError::NonsenseParameters),
         }
     }
 }
-

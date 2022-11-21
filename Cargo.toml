@@ -2,7 +2,7 @@
 name = "lru-weighted-cache"
 version = "0.1.2"
 authors = ["Elf M. Sternberg <elf.sternberg@gmail.com>"]
-edition = "2018"
+edition = "2021"
 license = "MPL-2.0+"
 description = "Weighted LRU Cache"
 repository = "https://github.com/elfsternberg/lru-weighted-cache"
