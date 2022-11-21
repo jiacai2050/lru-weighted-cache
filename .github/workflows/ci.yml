@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**.md'
+      - '**.yml'
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - '**.md'
+      - '**.yml'
+
+# Common environment variables
+env:
+  RUSTFLAGS: "-C debuginfo=1"
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  ut:
+    name: Unit Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        rust-version: [stable]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - run: |
+          make format clip test

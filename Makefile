@@ -29,7 +29,7 @@ lint:
 	cargo check
 
 clip:
-	cargo clippy
+	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
 format:
 	cargo fmt
