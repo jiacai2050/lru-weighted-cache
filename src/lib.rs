@@ -274,30 +274,16 @@ impl<K: Hash + Eq, V: Weighted> LruWeightedCache<K, V> {
 #[doc(hidden)]
 impl<K, V> Drop for LruWeightedCache<K, V> {
     fn drop(&mut self) {
-        unsafe {
-            let head = *Box::from_raw(self.head);
-            let tail = *Box::from_raw(self.tail);
+        self.cache.values_mut().for_each(|e| unsafe {
+            ptr::drop_in_place(e.key.as_mut_ptr());
+            ptr::drop_in_place(e.value.as_mut_ptr());
+        });
 
-            // The key and value in these were never used.  Tell the
-            // compiler we're forgetting about them without "dropping"
-            // them.
+        // We rebox the head/tail, and because these are maybe-uninit
+        // they do not have the absent k/v dropped.
 
-            let LruCacheItem {
-                key: head_key,
-                value: head_val,
-                ..
-            } = head;
-            let LruCacheItem {
-                key: tail_key,
-                value: tail_val,
-                ..
-            } = tail;
-
-            _ = head_key.assume_init();
-            _ = head_val.assume_init();
-            _ = tail_key.assume_init();
-            _ = tail_val.assume_init();
-        }
+        let _head = unsafe { *Box::from_raw(self.head) };
+        let _tail = unsafe { *Box::from_raw(self.tail) };
     }
 }
 
