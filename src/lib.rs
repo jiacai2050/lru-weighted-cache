@@ -287,6 +287,22 @@ impl<K, V> Drop for LruWeightedCache<K, V> {
     }
 }
 
+// The compiler does not automatically derive Send and Sync for LruCache because it contains
+// raw pointers. The raw pointers are safely encapsulated by LruCache though so we can
+// implement Send and Sync for it below.
+unsafe impl<K: Send, V: Send> Send for LruWeightedCache<K, V> {}
+unsafe impl<K: Sync, V: Sync> Sync for LruWeightedCache<K, V> {}
+
+impl<K: Hash + Eq, V> std::fmt::Debug for LruWeightedCache<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("LruWeightedCache")
+            .field("max_item_weight", &self.max_item_weight)
+            .field("max_total_weight", &self.max_total_weight)
+            .field("current_weight", &self.current_weight)
+            .finish()
+    }
+}
+
 impl Weighted for String {
     fn weight(&self) -> usize {
         self.len()
